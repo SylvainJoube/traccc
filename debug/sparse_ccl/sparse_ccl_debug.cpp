@@ -9,12 +9,13 @@
  *  I made this file to test whether or not the SparseCCL implemantation
  *  is broken.
  *  As far as I can tell with my naive recursive implementation of CCL,
- *  I do not think SpaseCCL is making a wrong evaluation of the cluster number.
+ *  I do not think SpaseCCL is making any wrong evaluation on the cluster number.
  *  But again, I might be wrong, and I did not spend more than two days on the
  *  matter.
  * 
- *  Please do not hesitate to contact me on GitHub (SylvainJoube) or
- *  by email : sylvain.joube@ijclab.in2p3.fr
+ *  Please do not hesitate to contact me on GitHub (SylvainJoube)
+ *  or by email : sylvain.joube@ijclab.in2p3.fr
+ *  or on the traccc mattermost : sylvain.joube
  */
 
 #include "edm/cell.hpp"
@@ -38,9 +39,12 @@
  *  param1 <detector_file>  : csv file to use
  *  param2 <cell_directory> : event prefix file name
  *  param3 <events>         : number of events (i.e. separate csv files)
+ *  param4 <path_to_python_generated_data> 
+ *                          : full path to a compatible CSV file (see data_generation.py)
+ *                            you can put an invalid path to disable this check
  *  
  *  Full example : 
- *  ./sparse_ccl_debug tml_detector/trackml-detector.csv tml_pixels 10
+ *  ./sparse_ccl_debug tml_detector/trackml-detector.csv tml_pixels 10 <path_to_python_generated_data or invalid value>
  */
 
 
@@ -59,18 +63,45 @@ namespace traccc::chkccl {
 
     // A bad nasty horrible hard-coded module dimension
     // (I saw that every module in trackml-detector had those dimensions)
-    constexpr uint width  = 336;
-    constexpr uint height = 1280;
+    uint width  = 336;
+    uint height = 1280;
 
     // Grid (pixels) for a given module
     struct mgrid {
-        bool present[width][height];
+        bool **present = nullptr; //[width][height];
+        int w = 0;
+        int h = 0;
     };
 
+    void free_mgrid(mgrid &coll); // forward
+
     void init_mgrid(mgrid &coll) {
+        if (coll.w != width || coll.h != height || coll.present == nullptr) {
+            free_mgrid(coll);
+            coll.present = new bool*[width];
+            for (int x = 0; x < width; ++x) {
+                coll.present[x] = new bool[height];
+            }
+            coll.w = width;
+            coll.h = height;
+        }
+        
         for (uint x = 0; x < width; ++x) for (uint y = 0; y < height; ++y) {
             coll.present[x][y] = 0;
         }
+    }
+
+    void free_mgrid(mgrid &coll) {
+        if (coll.w == 0 || coll.h == 0) return;
+        if (coll.present != nullptr) {
+            for (int x = 0; x < coll.w; ++x) {
+                delete coll.present[x];
+            }
+            delete coll.present;
+            coll.present = nullptr;
+        }
+        coll.w = 0;
+        coll.h = 0;
     }
 
     /// Get a cell_collection from an mgrid
@@ -162,11 +193,30 @@ namespace traccc::chkccl {
     using label_t = uint32_t;
 
     struct cmodule {
-        present_t present[width][height]; // pixel presence
-        label_t   label[width][height];   // recursively computed label
+        present_t **present; // pixel presence
+        label_t   **label;   // recursively computed label
+        int w = 0;
+        int h = 0;
     };
 
+    void free_cmodule(cmodule &module); // forward declaration
+
     void init_cmodule(cmodule &module) {
+        
+        if (module.w != width || module.h != height || module.present == nullptr || module.label == nullptr) {
+            free_cmodule(module);
+            module.present = new present_t*[width];
+            for (int x = 0; x < width; ++x) {
+                module.present[x] = new present_t[height];
+            }
+            module.label = new label_t*[width];
+            for (int x = 0; x < width; ++x) {
+                module.label[x] = new label_t[height];
+            }
+            module.w = width;
+            module.h = height;
+        }
+
         for (uint x = 0; x < width; ++x) {
             for (uint y = 0; y < height; ++y) {
                 module.label[x][y] = 0;   // no label
@@ -174,7 +224,27 @@ namespace traccc::chkccl {
             }
         }
     }
-    
+
+    void free_cmodule(cmodule &module) {
+        if (module.w == 0 || module.h == 0) return;
+        if (module.present != nullptr) {
+            for (int x = 0; x < module.w; ++x) {
+                delete module.present[x];
+            }
+            delete module.present;
+            module.present = nullptr;
+        }
+        if (module.label != nullptr) {
+            for (int x = 0; x < module.w; ++x) {
+                delete module.label[x];
+            }
+            delete module.label;
+            module.label = nullptr;
+        }
+        module.w = 0;
+        module.h = 0;
+    }
+
     void check_ccl_validity_recur(int x, int y, label_t current_label, cmodule &module) {
         if (x < 0 || x >= width) return;
         if (y < 0 || y >= height) return;
@@ -224,6 +294,7 @@ namespace traccc::chkccl {
 
         if (component_count == expected_label_nb) {
             //myfile << "all good.\n";
+            free_cmodule(module);
             return 0;
         } else {
 
@@ -274,6 +345,7 @@ namespace traccc::chkccl {
                 myfile << std::endl << std::endl;
             }
 
+            free_cmodule(module);
             return 2;
         }
     }
@@ -325,33 +397,90 @@ int generate_data_and_test_ccl() {
     return error_count;
 }
 
+std::string get_data_directory() {
+    auto env_d_d = std::getenv("TRACCC_TEST_DATA_DIR");
+    if (env_d_d == nullptr) {
+        throw std::ios_base::failure("Test data directory not found. Please set TRACCC_TEST_DATA_DIR.");
+    }
+    return std::string(env_d_d) + std::string("/");
+}
 
+
+
+void process_event_file(std::string io_cells_file, const int eventTotalNb, const int eventCount, uint &m_modules, uint &n_errors,
+                        uint &n_cells, uint &n_clusters, traccc::component_connection cc) {
+
+    //io_cells_file = "/home/sylvain/Desktop/traccc-local/traccc/data//ccl_test_gen_data.csv";
+    traccc::cell_reader creader(io_cells_file, {"geometry_id", "hit_id", "cannel0", "channel1", "activation", "time"});
+    traccc::cell_container cells_per_event = traccc::read_cells(creader/*, surface_transforms*/);
+    
+    int module_event_count = cells_per_event.size();
+    int local_module_count = 0;
+    m_modules += module_event_count;
+    int n_module_this_event = 0;
+    int n_error_this_event = 0;
+
+    std::cout << "Processing event file " << eventCount + 1 << " / " << eventTotalNb << "..." << std::endl;
+
+    int perten = -1; // pencent /100; perten /10
+
+    for (auto &cells_per_module : cells_per_event)
+    {
+        // The algorithmic code part: start
+        // CCL algorithm
+        traccc::cluster_collection clusters_per_module = cc(cells_per_module);
+
+        int sparse_ccl_cluster_count = clusters_per_module.items.size();
+
+        // Simple, naive recursive check
+        int res = traccc::chkccl::check_ccl_validity(cells_per_module, sparse_ccl_cluster_count);
+        
+        if (res != 0) {
+            ++n_errors;
+            ++n_error_this_event;
+        }
+        
+        ++n_module_this_event;
+
+        int new_perten = 10 * n_module_this_event / module_event_count;
+        if (perten != new_perten) {
+            perten = new_perten;
+            std::cout << perten << "0% " << std::flush;// << std::endl; // "[event " << event << "] " << 
+            
+        }
+        
+        n_cells += cells_per_module.items.size();
+        n_clusters += sparse_ccl_cluster_count;
+    }
+    std::cout << "\n- errors : " << n_error_this_event << "\n\n";
+}
+
+
+
+void show_statistics(const uint m_modules, const uint n_errors, const uint n_clusters, const uint n_cells) {
+    std::cout << "==> Statistics ... " << std::endl;
+    std::cout << "- " << m_modules << " modules tested" << std::endl;
+    std::cout << "- " << n_errors  << " error on cluster count" << std::endl;
+    std::cout << "- " << n_clusters   << " clusters found" << std::endl;
+    std::cout << "- " << n_cells   << " total pixels read" << std::endl;
+    std::cout << std::endl;
+}
 
 int seq_run_debug(const std::string& detector_file, const std::string& cells_dir, unsigned int events)
 {
 
     std::cout << "vvvvvv BEGIN TESTS ON CSV DATA vvvvvv" << std::endl << std::endl;
 
-    auto env_d_d = std::getenv("TRACCC_TEST_DATA_DIR");
-    if (env_d_d == nullptr)
-    {
-        throw std::ios_base::failure("Test data directory not found. Please set TRACCC_TEST_DATA_DIR.");
-    }
-    auto data_directory = std::string(env_d_d) + std::string("/");
-
-    // Read the surface transforms
-    std::string io_detector_file = data_directory + detector_file;
-    traccc::surface_reader sreader(io_detector_file, {"geometry_id", "cx", "cy", "cz", "rot_xu", "rot_xv", "rot_xw", "rot_zu", "rot_zv", "rot_zw"});
-    auto surface_transforms = traccc::read_surfaces(sreader);
+    std::string data_directory = get_data_directory();
 
     // Algorithms
     traccc::component_connection cc;
 
     // Output stats
-    uint64_t n_cells = 0;
-    uint64_t m_modules = 0;
-    uint64_t n_clusters = 0;
-    uint64_t n_errors = 0;
+    uint n_cells = 0;
+    uint m_modules = 0;
+    uint n_clusters = 0;
+    uint n_errors = 0;
 
     // Loop over events
     for (unsigned int event = 0; event < events; ++event){
@@ -362,79 +491,99 @@ int seq_run_debug(const std::string& detector_file, const std::string& cells_dir
         event_string.replace(event_string.size()-event_number.size(), event_number.size(), event_number);
 
         std::string io_cells_file = data_directory+cells_dir+std::string("/event")+event_string+std::string("-cells.csv");
-        traccc::cell_reader creader(io_cells_file, {"geometry_id", "hit_id", "cannel0", "channel1", "activation", "time"});
-        traccc::cell_container cells_per_event = traccc::read_cells(creader, surface_transforms);
         
-        int module_event_count = cells_per_event.size();
-        m_modules += module_event_count;
-        int n_module_this_event = 0;
-        int n_error_this_event = 0;
-
-        std::cout << "Processing event file " << event + 1 << " / " << events << "..." << std::endl;
-
-        int perten = -1; // pencent /100; perten /10
-
-        for (auto &cells_per_module : cells_per_event)
-        {
-            // The algorithmic code part: start
-            // CCL algorithm
-            traccc::cluster_collection clusters_per_module = cc(cells_per_module);
-
-            int sparse_ccl_cluster_count = clusters_per_module.items.size();
-
-            // Simple, naive recursive check
-            int res = traccc::chkccl::check_ccl_validity(cells_per_module, sparse_ccl_cluster_count);
-            //int recur_culster_count = 
-            if (res != 0) {
-                ++n_errors;
-                ++n_error_this_event;
-            }
-            
-            ++n_module_this_event;
-
-            int new_perten = 10 * n_module_this_event / module_event_count;
-            if (perten != new_perten) {
-                perten = new_perten;
-                std::cout << perten << "0% " << std::flush;// << std::endl; // "[event " << event << "] " << 
-                
-            }
-            
-            
-            n_cells += cells_per_module.items.size();
-            n_clusters += sparse_ccl_cluster_count;
-        }
-        std::cout << "\n- errors : " << n_error_this_event << "\n\n";
+        process_event_file(io_cells_file, events, event, m_modules, n_errors, n_cells, n_clusters, cc);
+        
     }
 
-
-    std::cout << std::endl;
-    std::cout << "==> Statistics ... " << std::endl;
-    std::cout << "- " << m_modules << " modules tested" << std::endl;
-    std::cout << "- " << n_errors  << " error on cluster count" << std::endl;
-    std::cout << "- " << n_clusters   << " clusters found" << std::endl;
-    std::cout << "- " << n_cells   << " total pixels read" << std::endl;
-    std::cout << std::endl;
+    show_statistics(m_modules, n_errors, n_clusters, n_cells);
 
     std::cout << "^^^^^^ END TESTS ON CSV DATA ^^^^^^" << std::endl << std::endl;
 
     return 0;
 }
 
+int test_stephen_data(std::string io_cells_file) {
+    // csv data as "x, y, value, time"
+    int old_width = traccc::chkccl::width;
+    int old_height = traccc::chkccl::height;
+
+    std::cout << "vvvvvv BEGIN TESTS STEPHEN DATA vvvvvv" << std::endl;
+
+    std::cout << "WARNING : THIS MAY TAKE A LOT OF RAM. LIKE 20Go.\n\n";
+
+    traccc::chkccl::width  = 65535;
+    traccc::chkccl::height = 65535;
+
+    //std::string fullpath = get_data_directory() + io_cells_file;
+    std::cout << "Generated data path = --" << io_cells_file << "--\n\n";
+
+    // Parse CSV data
+    traccc::cell_reader creader(io_cells_file, {"geometry_id", "hit_id", "channel0", "channel1", "activation", "time"});
+    traccc::cell_container cells_per_event = traccc::read_cells(creader);
+
+    std::cout << "Processing Stephen file " << 1 << " / " << 1 << "..." << std::endl;
+
+    uint events = 1;
+    uint event = 0;
+
+    // Algorithms
+    traccc::component_connection cc;
+
+    // Output stats
+    uint n_cells = 0;
+    uint m_modules = 0;
+    uint n_clusters = 0;
+    uint n_errors = 0;
+
+    process_event_file(io_cells_file, events, event, m_modules, n_errors, n_cells, n_clusters, cc);
+
+    show_statistics(m_modules, n_errors, n_clusters, n_cells);
+
+    std::cout << "^^^^^^ END TESTS STEPHEN CSV DATA ^^^^^^" << std::endl << std::endl;
+
+    // To not break things
+    traccc::chkccl::width  = old_width;
+    traccc::chkccl::height = old_height;
+    return 0;
+}
+
+
+// taken from 
+inline bool file_exists(const std::string& name) {
+    if (FILE *file = fopen(name.c_str(), "r")) {
+        fclose(file);
+        return true;
+    } else {
+        return false;
+    }   
+}
+
 // The main routine
 //
 int main(int argc, char *argv[])
 {
-    if (argc < 4){
+    if (argc < 5){
         std::cout << "Not enough arguments, minimum requirement: " << std::endl;
-        std::cout << "./sparse_ccl_debug <detector_file> <cell_directory> <events>" << std::endl;
+        std::cout << "./sparse_ccl_debug <detector_file> <cell_directory> <events> <path_to_python_generated_data>" << std::endl;
         return -1;
     }
 
     auto detector_file = std::string(argv[1]);
     auto cell_directory = std::string(argv[2]);
     auto events = std::atoi(argv[3]);
+    auto path_to_python_generated_data = std::string(argv[4]);
 
-    std::cout << "Running ./sparse_ccl_debug " << detector_file << " " << cell_directory << " " << events << std::endl;
+    std::cout << "\n";
+
+    if (file_exists(path_to_python_generated_data))
+        test_stephen_data(path_to_python_generated_data);
+    else {
+        std::cout << "WARNING : No valid <path_to_python_generated_data> provided, ignoring this check...\n\n";
+    }
+    
+
+    std::cout << "Running ./sparse_ccl_debug " << detector_file << " " << cell_directory << " " << events << "\n\n";
     int res = seq_run_debug(detector_file, cell_directory, events);
     
     res = res || generate_data_and_test_ccl();
