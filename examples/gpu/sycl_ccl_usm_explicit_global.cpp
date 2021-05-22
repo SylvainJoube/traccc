@@ -147,8 +147,8 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             // Number of modules from this event
             uint module_count = cells_per_event.headers.size();
 
-            log("S - I think header size(" + std::to_string(module_count) + ") should be equal to "
-            + "items size(" + std::to_string(cells_per_event.items.size()) + ")");
+            //log("S - I think header size(" + std::to_string(module_count) + ") should be equal to "
+            //+ "items size(" + std::to_string(cells_per_event.items.size()) + ")");
             // a vector of modules
             // and a jagged vector of cells
             
@@ -258,17 +258,19 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             sycl_q.wait_and_throw();
             t_copy_to_device = get_ms() - t_start;
 
-            // Module data should be around 30 872 bytes
-            log("  ==> Data sent to device, in bytes (modules)              = "
+            // Module data should be around 30 872 bytes for event 1
+            // Cells data should be around 3 192 752 bytes for event 1
+            log("  ==> Data sent to device, in bytes :");
+            log("      Modules   = "
                 + std::to_string(module_count * sizeof(traccc::sycl::ccl::input_module_ctrl)));
-
-            // Cells data should be around 3 192 752 bytes
-            log("  ==> Data sent to device, in bytes (cells)                = "
+            log("      Cells     = "
                 + std::to_string(total_cell_count * sizeof(traccc::sycl::ccl::input_cell)));
 
-            log("  <== Data retrieved from device, in bytes (cluster_count) = "
+
+            log("  <== Data retrieved from device, in bytes :");
+            log("      Cluster_count   = "
                 + std::to_string(module_count * sizeof(traccc::sycl::ccl::output_module_ctrl)));
-            log("  <== Data retrieved from device, in bytes (labels)        = "
+            log("      Labels          = "
                 + std::to_string(total_cell_count * sizeof(traccc::sycl::ccl::output_cell)));
 
             t_start = get_ms();
@@ -362,15 +364,19 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             }
             t_cpu = get_ms() - t_start;
 
+            sycl_cluster_verification_count += total_cluster_count_chk;
+
             // Only checks the culster count, not the labels (I will do that in the future)
 
             if (total_cluster_count_chk == total_cluster_count) {
-                log("OK Seems to have worked, same number of clusters on GPU and CPU !");
+                log("OK Seems to have worked, same number of clusters on GPU and CPU ! ("
+                + std::to_string(total_cluster_count) + ")");
             } else {
                 log("!!!!!-ERROR-!!!!! : cluster number does not match between CPU and GPU.");
                 log("Cluster count at event " + std::to_string(event) + " = " + std::to_string(total_cluster_count)
                 + " should be " + std::to_string(total_cluster_count_chk)
                 + "  total_cell_count = " + std::to_string(total_cell_count));
+                sycl_cluster_error_count += std::abs(static_cast<int>(total_cluster_count_chk) - static_cast<int>(total_cluster_count));
             }
 
             t_start = get_ms();
