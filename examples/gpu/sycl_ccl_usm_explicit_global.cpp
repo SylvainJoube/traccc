@@ -21,6 +21,7 @@
 #include "algorithms/measurement_creation.hpp"
 #include "algorithms/spacepoint_formation.hpp"
 #include "csv/csv_io.hpp"
+#include "binary/binary_io.hpp"
 #include <iomanip>
 #include <stdlib.h>
 #include <sstream>
@@ -135,15 +136,20 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             log("\n===== Processing event " + std::to_string(event) + " =====");
 
             // Read the cells from the relevant event file
-            std::string event_string = "000000000";
+            /*std::string event_string = "000000000";
             std::string event_number = std::to_string(event);
             event_string.replace(event_string.size()-event_number.size(), event_number.size(), event_number);
 
 
             std::string io_cells_file = data_directory+cells_dir+std::string("/event")+event_string+std::string("-cells.csv");
             traccc::cell_reader creader(io_cells_file, {"geometry_id", "hit_id", "cannel0", "channel1", "activation", "time"});
-            traccc::host_cell_container cells_per_event = traccc::read_cells(creader, resource, surface_transforms);
+            traccc::host_cell_container cells_per_event = traccc::read_cells(creader, resource, surface_transforms);*/
             
+            std::string event_bin_path = "/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin";
+
+            traccc::host_cell_container cells_per_event;
+            bool binio_success = traccc::binio::read_cells(event_bin_path, cells_per_event);
+
             // Number of modules from this event
             uint module_count = cells_per_event.headers.size();
 
