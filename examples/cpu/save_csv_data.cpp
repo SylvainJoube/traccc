@@ -88,7 +88,6 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
 
         success = traccc::binio::check_results(cells_per_event, cells_per_event_verif, msg);
 
-
         if (! success) {
             std::cout << "ERROR CHECK RESULT for event " + std::to_string(event) + "\n";
             std::cout << "   message =  " + msg + "\n";
@@ -96,41 +95,9 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         }
 
         std::cout << "Event " + std::to_string(event) + " all checks passed !" << std::endl;
-
-
-
-        /*int module_count = cells_per_event.headers.size();
-
-        std::ofstream wf("/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin", std::ios::out | std::ios::binary);
-
-        // write module count
-        wf.write((char *)(&module_count), sizeof(int));
-
-        for (std::size_t i = 0; i < cells_per_event.items.size(); ++i ) {
-	        traccc::cell_module &module = cells_per_event.headers[i]; // traccc::cell_module
-            auto& cells  = cells_per_event.items[i]; // vecmem::vector<traccc::cell>
-
-            // write module struct
-            wf.write((char *)(&module), sizeof(module));
-
-            // write number of cells
-            int cell_count = cells.size();
-            wf.write((char *)(&cell_count), sizeof(int));
-
-            // write cells
-            for (std::size_t ic = 0; ic < cell_count; ++ic) {
-                traccc::cell cell = cells[ic];
-                wf.write((char *)(&cell), sizeof(traccc::cell));
-            }
-        }
-
-        wf.close();
-        if(!wf.good()) {
-            std::cout << "Error occurred at writing time!" << std::endl;
-            return 1;
-        }*/
     }
 
+    
 
 
     std::cout << "==> Wote everything ! " << std::endl;
