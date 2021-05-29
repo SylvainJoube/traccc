@@ -93,9 +93,15 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
     auto data_directory = std::string(env_d_d);
 
     // Read the surface transforms
-    std::string io_detector_file = data_directory + detector_file;
+    /*std::string io_detector_file = data_directory + detector_file;
     traccc::surface_reader sreader(io_detector_file, {"geometry_id", "cx", "cy", "cz", "rot_xu", "rot_xv", "rot_xw", "rot_zu", "rot_zv", "rot_zw"});
     auto surface_transforms = traccc::read_surfaces(sreader);
+    */
+
+    if ( ! traccc::binio::create_binary_from_csv_verbose(detector_file, cells_dir, data_directory, events) ) {
+        log("FATAL - ERROR on binary creation.");
+        return -1;
+    }
 
     // Algorithms
     traccc::component_connection cc; // CCL
@@ -155,7 +161,9 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         logsl("" + std::to_string(event) + " ");
 
         // Read the cells from the relevant event file
-        std::string event_bin_path = "/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin";
+        std::string event_bin_path = traccc::binio::get_binary_directory(cells_dir, data_directory)
+                                     + "/event"+std::to_string(event)+".bin";
+        //"/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin";
         traccc::host_cell_container cells_per_event;
         bool binio_success = traccc::binio::read_cells(event_bin_path, cells_per_event);
         if ( ! binio_success ) {

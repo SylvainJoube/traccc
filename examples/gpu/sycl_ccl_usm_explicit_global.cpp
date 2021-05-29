@@ -67,6 +67,7 @@ void log(std::string str) {
     std::cout << str << std::endl;
 }
 
+
 int seq_run(const std::string& detector_file, const std::string& cells_dir, unsigned int events)
 {
     std::cout << "Version SYCL buffers / accesseurs\n";
@@ -77,10 +78,20 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
     }
     auto data_directory = std::string(env_d_d);
 
+    /*log("sycl_ccl_usm_explicit_global");
+    log("detector_file = " + detector_file);
+    log("cells_dir = " + cells_dir);
+    log("data_directory = " + data_directory);*/
+
+    if ( ! traccc::binio::create_binary_from_csv_verbose(detector_file, cells_dir, data_directory, events) ) {
+        log("FATAL - ERROR on binary creation.");
+        return -1;
+    }
+
     // Read the surface transforms
-    std::string io_detector_file = data_directory + detector_file;
+    /*std::string io_detector_file = data_directory + detector_file;
     traccc::surface_reader sreader(io_detector_file, {"geometry_id", "cx", "cy", "cz", "rot_xu", "rot_xv", "rot_xw", "rot_zu", "rot_zv", "rot_zw"});
-    auto surface_transforms = traccc::read_surfaces(sreader);
+    auto surface_transforms = traccc::read_surfaces(sreader);*/
 
     // Algorithms
     traccc::component_connection cc; // CCL
@@ -145,7 +156,8 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             traccc::cell_reader creader(io_cells_file, {"geometry_id", "hit_id", "cannel0", "channel1", "activation", "time"});
             traccc::host_cell_container cells_per_event = traccc::read_cells(creader, resource, surface_transforms);*/
             
-            std::string event_bin_path = "/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin";
+            std::string event_bin_path = traccc::binio::get_binary_directory(cells_dir, data_directory)
+                                         + "/event"+std::to_string(event)+".bin"; //"/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin";
 
             traccc::host_cell_container cells_per_event;
             bool binio_success = traccc::binio::read_cells(event_bin_path, cells_per_event);

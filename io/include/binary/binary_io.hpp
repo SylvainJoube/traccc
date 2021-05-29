@@ -14,6 +14,19 @@
 #include <string.h>
 #include <iostream>
 
+#include <filesystem>
+
+#include <vecmem/memory/host_memory_resource.hpp>
+
+/*#include <iostream>
+#include <fstream>
+#include <cstdio>
+#include <cstring>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/stat.h>*/
+
 
 namespace traccc::binio {
     
@@ -36,7 +49,7 @@ namespace traccc::binio {
         int module_count;
         rf.read((char *)(&module_count), sizeof(int));
 
-        log("read_cells module_count " + std::to_string(module_count) + " start...");
+        //log("read_cells module_count " + std::to_string(module_count) + " start...");
 
         //log("read_cells 2");
 
@@ -200,6 +213,122 @@ namespace traccc::binio {
 
         return true;
 
+    }
+
+
+    std::string get_binary_directory(const std::string& cells_dir, const std::string& data_directory) {
+        std::string cells_base_directory = data_directory + cells_dir;
+        std::string bin_directory = cells_base_directory + std::string("/binary");
+        return bin_directory;
+    }
+
+    // Create binary files from csv, when does not exist
+    bool create_binary_from_csv_verbose(const std::string& detector_file, const std::string& cells_dir,
+                                        const std::string& data_directory, int event_count) {
+
+        /*log("create_binary_from_csv_verbose");
+        log("detector_file = " + detector_file);
+        log("cells_dir = " + cells_dir);
+        log("data_directory = " + data_directory);*/
+
+        std::string cells_base_directory = data_directory + cells_dir;
+        std::string bin_directory = get_binary_directory(cells_dir, data_directory); //cells_base_directory + std::string("/binary");
+        std::string csv_directory = cells_base_directory;
+
+        // First, checks if the needed binary files exists
+        // assumes that if a file exists, it's correct.
+        // To fix a broken file, just delete it in your filesystem.
+
+        std::vector<unsigned int> missing_events;
+
+        for (unsigned int event = 0; event < event_count; ++event) {
+            std::string event_fpath = bin_directory + "/event"+std::to_string(event)+".bin";
+            if ( ! std::filesystem::exists(event_fpath) ) {
+                missing_events.push_back(event);
+            }
+        }
+
+        if (missing_events.empty()) {
+            log("All binary files already present !");
+            log(std::string("If a file is broken (making bad results), please delete it in your filesystem, ")
+              + std::string("as it will be re-created automatically on next run."));
+            return true;
+        }
+
+
+        // Read the surface transforms
+        std::string io_detector_file = data_directory + detector_file;
+        traccc::surface_reader sreader(io_detector_file, {"geometry_id", "cx", "cy", "cz", "rot_xu", "rot_xv", "rot_xw", "rot_zu", "rot_zv", "rot_zw"});
+        auto surface_transforms = traccc::read_surfaces(sreader);
+
+        // Memory resource used by the EDM.
+        vecmem::host_memory_resource resource;
+
+        if ( ! std::filesystem::is_directory(bin_directory) ) {
+            log("Creating binary directory... " + bin_directory);
+            std::filesystem::create_directory(bin_directory);
+        }
+
+        if ( ! std::filesystem::is_directory(bin_directory) ) {
+            log("ERROR creating csv to binary directory, unable to create :\n" + bin_directory);
+            return false;
+        }
+
+        // Loop over events
+        // Only converts missing binary files
+        //for (unsigned int event = 0; event < event_count; ++event){
+        for (unsigned int event : missing_events) {
+
+            std::cout << "== loading and converting event " + std::to_string(event) + "... ===" << std::endl;
+
+            // Read the cells from the relevant event file
+            std::string event_string = "000000000";
+            std::string event_number = std::to_string(event);
+            event_string.replace(event_string.size()-event_number.size(), event_number.size(), event_number);
+
+            std::string io_cells_file = csv_directory + std::string("/event")+event_string+std::string("-cells.csv");
+            traccc::cell_reader creader(io_cells_file, {"geometry_id", "hit_id", "cannel0", "channel1", "activation", "time"});
+            traccc::host_cell_container cells_per_event = traccc::read_cells(creader, resource, surface_transforms);
+            
+            // /home/sylvain/Desktop/StageM2/traccc/data_bin
+            std::string event_fpath = bin_directory + "/event"+std::to_string(event)+".bin";
+
+            bool success;
+            
+            success = traccc::binio::write_cells(cells_per_event, event, event_fpath);
+
+            if (! success) {
+                std::cout << "ERROR WRITE CELLS for event " + std::to_string(event) + "\n";
+                return false;
+            }
+            std::cout << "Event " + std::to_string(event) + " written..." << std::endl;
+
+            traccc::host_cell_container cells_per_event_verif;
+
+            std::cout << "Event " + std::to_string(event) + " reading cells..." << std::endl;
+
+            success = traccc::binio::read_cells(event_fpath, cells_per_event_verif);
+
+            if (! success) {
+                std::cout << "ERROR READ CELLS for event " + std::to_string(event) + "\n";
+                return false;
+            }
+            std::cout << "Event " + std::to_string(event) + " read..." << std::endl;
+
+            std::string msg;
+
+            success = traccc::binio::check_results(cells_per_event, cells_per_event_verif, msg);
+
+            if (! success) {
+                std::cout << "ERROR CHECK RESULT for event " + std::to_string(event) + "\n";
+                std::cout << "   message =  " + msg + "\n";
+                return false;
+            }
+
+            std::cout << "Event " + std::to_string(event) + " all checks passed !" << std::endl;
+        }
+        std::cout << "==> Wrote everything ! " << std::endl;
+        return true;
     }
 
     
