@@ -82,14 +82,14 @@ namespace traccc {
 
 // ================== Explicit USM, with a single large buffer ==================
 
-int seq_run(const std::string& detector_file, const std::string& cells_dir, unsigned int events)
+int seq_run(const std::string& detector_file, const std::string& cells_dir, unsigned int events, unsigned int warmup_count)
 { try {
 
     // ============== Modifiable benchmark constants ==============
 
     uint repeat_data_count = 30;
 
-    uint warmup_count = 1;
+    //uint warmup_count = 1;
 
     // Ok, that's actually VERY VERY DIRTY, I'm sorry fot that...
     // For event 1 to 10, that was about 991 cells.
@@ -526,6 +526,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
                 << "t_linearization_fill         = " << t_linearization_fill << std::endl
                 << "t_allocation_device          = ..." << std::endl
                 << "t_copy_to_device - - - - - - = ..." << std::endl // t_copy_to_device << std::endl
+                << "t_buffer_creation - - - - -  = ..." << std::endl
                 << "t_parallel_for               = " << t_parallel_for << std::endl
                 << "t_read_from_device - - - - - = ..." << std::endl // << t_read_from_device << std::endl
                 //<< "t_sum_clusters_from_device   = " << t_sum_clusters_from_device << std::endl
@@ -580,7 +581,7 @@ int main(int argc, char *argv[])
 {
     if (argc < 4){
         std::cout << "Not enough arguments, minimum requirement: " << std::endl;
-        std::cout << "./sycl_ccl_usm_explicit_global <detector_file> <cell_directory> <event_count>" << std::endl;
+        std::cout << "./sycl_ccl_usm_explicit_global <detector_file> <cell_directory> <event_count> <warmup_count>" << std::endl;
         return -1;
     }
 
@@ -593,8 +594,10 @@ int main(int argc, char *argv[])
     auto detector_file = std::string(argv[1]);
     auto cell_directory = std::string(argv[2]);
     auto events = std::atoi(argv[3]);
+    unsigned int warmup_count = std::atoi(argv[4]);
 
-    std::cout << "Running ./sycl_ccl_usm_explicit_global " << detector_file << " " << cell_directory << " " << events << std::endl;
+    std::cout << "Running ./sycl_ccl_usm_explicit_global " << detector_file << " " << cell_directory << " " << events
+              << " " << warmup_count << std::endl;
     
-    return seq_run(detector_file, cell_directory, events);
+    return seq_run(detector_file, cell_directory, events, warmup_count);
 }
