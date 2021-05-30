@@ -92,6 +92,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
     uint warmup_count = 1;
 
     // Ok, that's actually VERY VERY DIRTY, I'm sorry fot that...
+    // For event 1 to 10, that was about 991 cells.
     const uint max_cell_count_per_module = 1000; //max_cell_count_per_module_t;
 
 
@@ -138,7 +139,8 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
     uint64_t t_start, t_start2;
     uint64_t t_cpu = 0; // cpu-land
     uint64_t t_gpu = 0; // sycl-land
-    uint64_t t_linearization = 0; // transformation into 1D array
+    uint64_t t_linearization_allocation = 0;
+    uint64_t t_linearization_fill = 0; // transformation into 1D array
     uint64_t t_queue_creation = 0;
     uint64_t t_allocation = 0;
     uint64_t t_copy_to_device = 0;
@@ -160,7 +162,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
 
 
 
-    // ============== Load events from disk, and store arrays in memory ==============
+    // ============== Load events from disk, and store arrays in RAM memory ==============
     // This section if not part of the benchmark, as data source is supposed to be memory.
 
     traccc::host_cell_container hc_containers[events]; // all events
@@ -180,7 +182,6 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         // Read the cells from the relevant event file
         std::string event_bin_path = traccc::binio::get_binary_directory(cells_dir, data_directory)
                                      + "/event"+std::to_string(real_event_id)+".bin";
-        //"/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin";
 
         traccc::host_cell_container cells_per_event;
         bool binio_success = traccc::binio::read_cells(event_bin_path, cells_per_event);
@@ -206,6 +207,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
     log("\n done. =====");
 
 
+
     // ============== GPU part (varies depending on USM implicit / explicit and accessors) ==============
     // ===> USM implicit here.
 
@@ -214,20 +216,15 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
 
     for (uint iwarmup_and_final_exec = 0; iwarmup_and_final_exec < warmup_count + 1; ++iwarmup_and_final_exec) {
 
-        log("warmup iteration " + std::to_string(iwarmup_and_final_exec) + "...");
+        log("Iteration " + std::to_string(iwarmup_and_final_exec) + "...");
 
         t_start = get_ms();
 
         // The default device selector will select the most performant device.
         cl::sycl::default_selector d_selector;
-        log("ok");
-        
-        
         cl::sycl::queue sycl_q(d_selector, exception_handler);
-        logsl("first wait and throw...");
         sycl_q.wait_and_throw();
         t_queue_creation = get_ms() - t_start;
-        t_start = get_ms();
 
         // Print out the device information used for the kernel code.
         std::cout << "Running on device: "
@@ -235,6 +232,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
 
         // ==== 1D array creation from modules and cells (RAM) ====
 
+        t_start = get_ms();
         // Module controllers allocation (input / output)
         traccc::sycl::ccl::input_module_ctrl *ctrl_input_array = cl::sycl::malloc_shared<traccc::sycl::ccl::input_module_ctrl>(module_count, sycl_q);
         //new traccc::sycl::ccl::input_module_ctrl[module_count];
@@ -250,10 +248,16 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         traccc::sycl::ccl::output_cell *output_cell_array = cl::sycl::malloc_shared<traccc::sycl::ccl::output_cell>(total_cell_count, sycl_q);
         //new traccc::sycl::ccl::output_cell[total_cell_count];
 
+        sycl_q.wait_and_throw();
+        t_linearization_allocation = get_ms() - t_start;
+        t_start = get_ms();
+
         // Fill hc_info
         for (unsigned int event = 0; event < events; ++event) {
             traccc::host_cell_container &cells_per_event = hc_containers[event];
             
+            // Save event info
+            // module_count and cell_count were saved above
             traccc::multi_event_info &einfo = hc_info[event];
             einfo.cell_start_index = current_cell_global_index;
             einfo.module_start_index = current_module_index;
@@ -280,9 +284,6 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
                 ++current_module_index;
             }
 
-            // Ok, that's actually VERY VERY DIRTY, I'm sorry fot that...
-            const uint max_cell_count_per_module = 1000; //max_cell_count_per_module_t;
-
             if (max_cell_count_per_module_t > max_cell_count_per_module_global)
                 max_cell_count_per_module_global = max_cell_count_per_module_t;
                 // For event 1 to 10, that was about 991 cells.
@@ -290,7 +291,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         }
         
         sycl_q.wait_and_throw();
-        t_linearization = get_ms() - t_start;
+        t_linearization_fill = get_ms() - t_start;
         t_start = get_ms();
 
 
@@ -302,230 +303,235 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         cl::sycl::default_selector d_selector;
         log("ok");
         try {
-            cl::sycl::queue sycl_q(d_selector, exception_handler);
+        cl::sycl::queue sycl_q(d_selector, exception_handler);
 
-            // Print out the device information used for the kernel code.
-            std::cout << "Running on device: "
-                    << sycl_q.get_device().get_info<cl::sycl::info::device::name>() << "\n";*/
+        // Print out the device information used for the kernel code.
+        std::cout << "Running on device: "
+                << sycl_q.get_device().get_info<cl::sycl::info::device::name>() << "\n";*/
 
-            //sycl_q.wait_and_throw();
+        //sycl_q.wait_and_throw();
+        
+
+
+        // ==== malloc_device part ====
+
+        t_start = get_ms();
+
+        // ctrl structs
+        /*traccc::sycl::ccl::input_module_ctrl *device_ctrl_input_array =
+            static_cast<traccc::sycl::ccl::input_module_ctrl *>
+            (cl::sycl::malloc_device(module_count * sizeof(traccc::sycl::ccl::input_module_ctrl), sycl_q));
+
+        traccc::sycl::ccl::output_module_ctrl *device_ctrl_output_array =
+            static_cast<traccc::sycl::ccl::output_module_ctrl *>
+            (cl::sycl::malloc_device(module_count * sizeof(traccc::sycl::ccl::output_module_ctrl), sycl_q));
+
+        // cells structs
+        traccc::sycl::ccl::input_cell *device_input_cell_array =
+            static_cast<traccc::sycl::ccl::input_cell *>
+            (cl::sycl::malloc_device(total_cell_count * sizeof(traccc::sycl::ccl::input_cell), sycl_q));
+
+        traccc::sycl::ccl::output_cell *device_output_cell_array =
+            static_cast<traccc::sycl::ccl::output_cell *>
+            (cl::sycl::malloc_device(total_cell_count * sizeof(traccc::sycl::ccl::output_cell), sycl_q));
+        
+        logsl("wait and throw...");
+        sycl_q.wait_and_throw();
+        t_allocation = get_ms() - t_start;
+        t_start = get_ms();
+        log("ok");
+
+        logsl("memcopy...");
+
+        // ==== data copy to device ====
+
+        sycl_q.memcpy(device_ctrl_input_array, ctrl_input_array, module_count * sizeof(traccc::sycl::ccl::input_module_ctrl));
+        sycl_q.memcpy(device_input_cell_array, input_cell_array, total_cell_count * sizeof(traccc::sycl::ccl::input_cell));
+        // no copy for write only data
+        logsl("wait and throw...");
+        sycl_q.wait_and_throw();
+        t_copy_to_device = get_ms() - t_start;
+        log("ok");*/
+
+        // Module data should be around 30 872 bytes for event 1
+        // Cells data should be around 3 192 752 bytes for event 1
+        uint data_sent_size =
+            module_count * sizeof(traccc::sycl::ccl::input_module_ctrl)
+            + total_cell_count * sizeof(traccc::sycl::ccl::input_cell);
+        uint data_retrived_size =
+            module_count * sizeof(traccc::sycl::ccl::output_module_ctrl)
+            + total_cell_count * sizeof(traccc::sycl::ccl::output_cell);
+
+        log("  Sent " + std::to_string(data_sent_size / 1048576)
+            + " & Retrived " + std::to_string(data_retrived_size / 1048576)
+            + " MiB.");
+        /*log("  ==> Data sent to device, in megabytes :");
+        log("      Modules   = "
+            + std::to_string(module_count * sizeof(traccc::sycl::ccl::input_module_ctrl) / (1024 * 1024)));
+        log("      Cells     = "
+            + std::to_string(total_cell_count * sizeof(traccc::sycl::ccl::input_cell) / (1024 * 1024)));
+
+
+        log("  <== Data retrieved from device, in megabytes :");
+        log("      Cluster_count   = "
+            + std::to_string(module_count * sizeof(traccc::sycl::ccl::output_module_ctrl) / (1024 * 1024)));
+        log("      Labels          = "
+            + std::to_string(total_cell_count * sizeof(traccc::sycl::ccl::output_cell) / (1024 * 1024)));
+        */
+        t_start = get_ms();
+
+        // ==== parallel for ====
+
+        sycl_q.parallel_for(cl::sycl::range<1>(module_count), [=](cl::sycl::id<1> module_indexx) {
+
+            uint module_index = module_indexx[0] % module_count;
+            // ---- SparseCCL part ----
+            // Internal list linking
+            uint first_cindex = ctrl_input_array[module_index].cell_start_index;
+            uint cell_count = ctrl_input_array[module_index].cell_count;
+            uint cell_index = first_cindex;
+            uint stop_cindex = first_cindex + cell_count;
             
-            log("ok");
-            logsl("malloc device...");
+            // The very dirty part : statically allocate a buffer of the maximum pixel density per module...
+            uint L[max_cell_count_per_module];
 
+            for (uint i = first_cindex; i < stop_cindex; ++i) {
+                output_cell_array[i].label = 0;
+            }
 
-            // ==== malloc_device part ====
-
-            t_start = get_ms();
-
-            // ctrl structs
-            /*traccc::sycl::ccl::input_module_ctrl *device_ctrl_input_array =
-                static_cast<traccc::sycl::ccl::input_module_ctrl *>
-                (cl::sycl::malloc_device(module_count * sizeof(traccc::sycl::ccl::input_module_ctrl), sycl_q));
-
-            traccc::sycl::ccl::output_module_ctrl *device_ctrl_output_array =
-                static_cast<traccc::sycl::ccl::output_module_ctrl *>
-                (cl::sycl::malloc_device(module_count * sizeof(traccc::sycl::ccl::output_module_ctrl), sycl_q));
-
-            // cells structs
-            traccc::sycl::ccl::input_cell *device_input_cell_array =
-                static_cast<traccc::sycl::ccl::input_cell *>
-                (cl::sycl::malloc_device(total_cell_count * sizeof(traccc::sycl::ccl::input_cell), sycl_q));
-
-            traccc::sycl::ccl::output_cell *device_output_cell_array =
-                static_cast<traccc::sycl::ccl::output_cell *>
-                (cl::sycl::malloc_device(total_cell_count * sizeof(traccc::sycl::ccl::output_cell), sycl_q));
-            
-            logsl("wait and throw...");
-            sycl_q.wait_and_throw();
-            t_allocation = get_ms() - t_start;
-            t_start = get_ms();
-            log("ok");
-
-            logsl("memcopy...");
-
-            // ==== data copy to device ====
-
-            sycl_q.memcpy(device_ctrl_input_array, ctrl_input_array, module_count * sizeof(traccc::sycl::ccl::input_module_ctrl));
-            sycl_q.memcpy(device_input_cell_array, input_cell_array, total_cell_count * sizeof(traccc::sycl::ccl::input_cell));
-            // no copy for write only data
-            logsl("wait and throw...");
-            sycl_q.wait_and_throw();
-            t_copy_to_device = get_ms() - t_start;
-            log("ok");*/
-
-            // Module data should be around 30 872 bytes for event 1
-            // Cells data should be around 3 192 752 bytes for event 1
-            log("  ==> Data sent to device, in megabytes :");
-            log("      Modules   = "
-                + std::to_string(module_count * sizeof(traccc::sycl::ccl::input_module_ctrl) / (1024 * 1024)));
-            log("      Cells     = "
-                + std::to_string(total_cell_count * sizeof(traccc::sycl::ccl::input_cell) / (1024 * 1024)));
-
-
-            log("  <== Data retrieved from device, in megabytes :");
-            log("      Cluster_count   = "
-                + std::to_string(module_count * sizeof(traccc::sycl::ccl::output_module_ctrl) / (1024 * 1024)));
-            log("      Labels          = "
-                + std::to_string(total_cell_count * sizeof(traccc::sycl::ccl::output_cell) / (1024 * 1024)));
-
-            t_start = get_ms();
-
-            // ==== parallel for ====
-            logsl("parallel for...");
-
-            //uint rep = module_count;
-            sycl_q.parallel_for(cl::sycl::range<1>(module_count), [=](cl::sycl::id<1> module_indexx) {
-
-                uint module_index = module_indexx[0] % module_count;
-                // ---- SparseCCL part ----
-                // Internal list linking
-                uint first_cindex = ctrl_input_array[module_index].cell_start_index;
-                uint cell_count = ctrl_input_array[module_index].cell_count;
-                uint cell_index = first_cindex;
-                uint stop_cindex = first_cindex + cell_count;
-                
-                // The very dirty part : statically allocate a buffer of the maximum pixel density per module...
-                uint L[max_cell_count_per_module];
-
-                for (uint i = first_cindex; i < stop_cindex; ++i) {
-                    output_cell_array[i].label = 0;
-                }
-
-                unsigned int start_j = 0;
-                for (unsigned int i=0; i < cell_count; ++i){
-                    L[i] = i;
-                    int ai = i;
-                    if (i > 0){
-                        const traccc::sycl::ccl::input_cell &ci = input_cell_array[i + first_cindex];
-                        for (unsigned int j = start_j; j < i; ++j){
-                            const traccc::sycl::ccl::input_cell &cj = input_cell_array[j + first_cindex];
-                            if (traccc::detail::is_adjacent(ci.cell, cj.cell)){
-                                ai = traccc::detail::make_union(L, ai, traccc::detail::find_root(L, j));
-                            } else if (traccc::detail::is_far_enough(ci.cell, cj.cell)){
-                                ++start_j;
-                            }
+            unsigned int start_j = 0;
+            for (unsigned int i=0; i < cell_count; ++i){
+                L[i] = i;
+                int ai = i;
+                if (i > 0){
+                    const traccc::sycl::ccl::input_cell &ci = input_cell_array[i + first_cindex];
+                    for (unsigned int j = start_j; j < i; ++j){
+                        const traccc::sycl::ccl::input_cell &cj = input_cell_array[j + first_cindex];
+                        if (traccc::detail::is_adjacent(ci.cell, cj.cell)){
+                            ai = traccc::detail::make_union(L, ai, traccc::detail::find_root(L, j));
+                        } else if (traccc::detail::is_far_enough(ci.cell, cj.cell)){
+                            ++start_j;
                         }
                     }
                 }
-
-                // second scan: transitive closure
-                uint labels = 0;
-                for (unsigned int i = 0; i < cell_count; ++i){
-                    unsigned int l = 0;
-                    if (L[i] == i){
-                        ++labels;
-                        l = labels; 
-                    } else {
-                        l = L[L[i]];
-                    }
-                    L[i] = l;
-                }
-
-                // Update the output values
-                for (unsigned int i = 0; i < cell_count; ++i){
-                    output_cell_array[i + first_cindex].label = L[i];
-                }
-                ctrl_output_array[module_index].cluster_count = labels;
-            });
-            logsl("wait and throw...");
-            sycl_q.wait_and_throw();
-            log("ok");
-            t_parallel_for = get_ms() - t_start;
-            t_start = get_ms();
-
-            /*logsl("Copy from device...");
-
-            // Reading data from device
-            sycl_q.memcpy(ctrl_output_array, device_ctrl_output_array, module_count * sizeof(traccc::sycl::ccl::output_module_ctrl));
-            sycl_q.memcpy(output_cell_array, device_output_cell_array, total_cell_count * sizeof(traccc::sycl::ccl::output_cell));
-
-            logsl("wait and throw...");
-            sycl_q.wait_and_throw();
-            log("ok");*/
-
-            t_read_from_device = get_ms() - t_start;
-            t_start = get_ms();
-
-            logsl("cpu verification...");
-            uint total_cluster_count = 0;
-            for (int i = 0; i < module_count; ++i) {
-                total_cluster_count += ctrl_output_array[i].cluster_count;
-            }
-            t_sum_clusters_from_device = get_ms() - t_start;
-            t_start = get_ms();
-
-            uint total_cluster_count_chk = 0;
-            for (uint im = 0; im < events; ++im) {
-                traccc::host_cell_container &cells_per_event = hc_containers[im];
-
-                vecmem::jagged_vector<traccc::cell> &cells_per_module_jagged = cells_per_event.items;
-
-                for (std::size_t i = 0; i < cells_per_module_jagged.size(); ++i) {
-                    // cells_per_module_jagged[i] is equal to cells_per_event.items[i]
-                    vecmem::vector<traccc::cell> &cells_per_module = cells_per_module_jagged[i];
-                    traccc::cell_module &module_info = cells_per_event.headers[i];
-                    traccc::cluster_collection clusters_per_module_cpu_verif = cc(cells_per_module, module_info);
-                    total_cluster_count_chk += clusters_per_module_cpu_verif.items.size();
-                }
-            }
-            log("ok");
-            t_cpu = get_ms() - t_start;
-
-            sycl_cluster_verification_count += total_cluster_count_chk;
-
-            // Only checks the culster count, not the labels (I will do that in the future)
-
-            if (total_cluster_count_chk == total_cluster_count) {
-                log("OK Seems to have worked, same number of clusters on GPU and CPU ! ("
-                + std::to_string(total_cluster_count) + ")");
-            } else {
-                log("!!!!!-ERROR-!!!!! : cluster number does not match between CPU and GPU.");
-                log("Cluster count at event " + std::to_string(0) + " = " + std::to_string(total_cluster_count)
-                + " should be " + std::to_string(total_cluster_count_chk)
-                + "  total_cell_count = " + std::to_string(total_cell_count));
-                sycl_cluster_error_count += std::abs(static_cast<int>(total_cluster_count_chk) - static_cast<int>(total_cluster_count));
             }
 
-            logsl("free shared memory...");
-            t_start = get_ms();
-            // Free SYCL malloc_shared
-            cl::sycl::free(ctrl_input_array, sycl_q);
-            cl::sycl::free(ctrl_output_array, sycl_q);
-            cl::sycl::free(input_cell_array, sycl_q);
-            cl::sycl::free(output_cell_array, sycl_q);
-            t_free_gpu = get_ms() - t_start;
-            t_start = get_ms();
-            log("ok");
-            /*
+            // second scan: transitive closure
+            uint labels = 0;
+            for (unsigned int i = 0; i < cell_count; ++i){
+                unsigned int l = 0;
+                if (L[i] == i){
+                    ++labels;
+                    l = labels; 
+                } else {
+                    l = L[L[i]];
+                }
+                L[i] = l;
+            }
 
-            logsl("free device memory...");
-            cl::sycl::free(device_ctrl_input_array, sycl_q);
-            cl::sycl::free(device_ctrl_output_array, sycl_q);
-            cl::sycl::free(device_input_cell_array, sycl_q);
-            cl::sycl::free(device_output_cell_array, sycl_q);
-            log("ok");
+            // Update the output values
+            for (unsigned int i = 0; i < cell_count; ++i){
+                output_cell_array[i + first_cindex].label = L[i];
+            }
+            ctrl_output_array[module_index].cluster_count = labels;
+        });
+        sycl_q.wait_and_throw();
+        t_parallel_for = get_ms() - t_start;
+        t_start = get_ms();
 
-            t_free_gpu = get_ms() - t_start;*/
-            
+        /*logsl("Copy from device...");
+
+        // Reading data from device
+        sycl_q.memcpy(ctrl_output_array, device_ctrl_output_array, module_count * sizeof(traccc::sycl::ccl::output_module_ctrl));
+        sycl_q.memcpy(output_cell_array, device_output_cell_array, total_cell_count * sizeof(traccc::sycl::ccl::output_cell));
+
+        logsl("wait and throw...");
+        sycl_q.wait_and_throw();
+        log("ok");*/
+
+        //t_read_from_device = get_ms() - t_start;
+        //t_start = get_ms();
+
+        uint total_cluster_count = 0;
+        for (int i = 0; i < module_count; ++i) {
+            total_cluster_count += ctrl_output_array[i].cluster_count;
+        }
+        t_sum_clusters_from_device = get_ms() - t_start;
+        t_start = get_ms();
+
+        uint total_cluster_count_chk = 0;
+        for (uint im = 0; im < events; ++im) {
+            traccc::host_cell_container &cells_per_event = hc_containers[im];
+
+            vecmem::jagged_vector<traccc::cell> &cells_per_module_jagged = cells_per_event.items;
+
+            for (std::size_t i = 0; i < cells_per_module_jagged.size(); ++i) {
+                // cells_per_module_jagged[i] is equal to cells_per_event.items[i]
+                vecmem::vector<traccc::cell> &cells_per_module = cells_per_module_jagged[i];
+                traccc::cell_module &module_info = cells_per_event.headers[i];
+                traccc::cluster_collection clusters_per_module_cpu_verif = cc(cells_per_module, module_info);
+                total_cluster_count_chk += clusters_per_module_cpu_verif.items.size();
+            }
+        }
+        t_cpu = get_ms() - t_start;
+
+        sycl_cluster_verification_count += total_cluster_count_chk;
+
+        // Only checks the culster count, not the labels (I will do that in the future)
+
+        if (total_cluster_count_chk == total_cluster_count) {
+            log("OK Seems to have worked, same number of clusters on GPU and CPU ! ("
+            + std::to_string(total_cluster_count) + ")");
+        } else {
+            log("!!!!!-ERROR-!!!!! : cluster number does not match between CPU and GPU.");
+            log("Cluster count at event " + std::to_string(0) + " = " + std::to_string(total_cluster_count)
+            + " should be " + std::to_string(total_cluster_count_chk)
+            + "  total_cell_count = " + std::to_string(total_cell_count));
+            sycl_cluster_error_count += std::abs(static_cast<int>(total_cluster_count_chk) - static_cast<int>(total_cluster_count));
+        }
+
+        logsl("free shared memory...");
+        t_start = get_ms();
+        // Free SYCL malloc_shared
+        cl::sycl::free(ctrl_input_array, sycl_q);
+        cl::sycl::free(ctrl_output_array, sycl_q);
+        cl::sycl::free(input_cell_array, sycl_q);
+        cl::sycl::free(output_cell_array, sycl_q);
+        t_free_gpu = get_ms() - t_start;
+        t_start = get_ms();
+        log("ok");
+        /*
+
+        logsl("free device memory...");
+        cl::sycl::free(device_ctrl_input_array, sycl_q);
+        cl::sycl::free(device_ctrl_output_array, sycl_q);
+        cl::sycl::free(device_input_cell_array, sycl_q);
+        cl::sycl::free(device_output_cell_array, sycl_q);
+        log("ok");
+
+        t_free_gpu = get_ms() - t_start;*/
+        
 
         /*} catch (cl::sycl::exception const &e) {
             std::cout << "An exception is caught while processing SyCL code.\n";
             std::terminate();
         }*/
 
-        t_gpu = t_allocation + t_copy_to_device + t_parallel_for + t_read_from_device;
+        t_gpu = t_linearization_allocation + t_linearization_fill
+                + t_queue_creation + t_parallel_for + t_free_gpu;
         std::cout 
-                << "t_cpu              = " << t_cpu << std::endl
-                << "t_gpu              = " << t_gpu << std::endl
-                << "t_linearization    = " << t_linearization << std::endl
-                << "t_queue_creation   = " << t_queue_creation << std::endl
-                << "t_allocation       = " << t_allocation << std::endl
-                << "t_copy_to_device   = " << t_copy_to_device << std::endl
-                << "t_parallel_for     = " << t_parallel_for << std::endl
-                << "t_read_from_device = " << t_read_from_device << std::endl
-                << "t_sum_clusters_from_device = " << t_sum_clusters_from_device << std::endl
-                << "t_free_gpu         = " << t_free_gpu << std::endl
+                << "t_cpu                        = " << t_cpu << std::endl
+                << "t_gpu - - - - - - - - - - -  = " << t_gpu << std::endl
+                << "t_queue_creation - - - - - - = " << t_queue_creation << std::endl
+                << "t_linearization_alloc        = " << t_linearization_allocation << std::endl
+                << "t_linearization_fill         = " << t_linearization_fill << std::endl
+                << "t_allocation_device          = ..." << std::endl
+                << "t_copy_to_device - - - - - - = ..." << std::endl // t_copy_to_device << std::endl
+                << "t_parallel_for               = " << t_parallel_for << std::endl
+                << "t_read_from_device - - - - - = ..." << std::endl // << t_read_from_device << std::endl
+                //<< "t_sum_clusters_from_device   = " << t_sum_clusters_from_device << std::endl
+                << "t_free_device                = " << t_free_gpu << std::endl
+                << "t_free_linearization - - - - = ..."  << std::endl // << t_read_from_device << std::endl
                 << std::endl;
 
         log("warmup iteration " + std::to_string(iwarmup_and_final_exec) + "  FINISHED!!");
@@ -544,38 +550,24 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
 
     // Free the data in RAM
     // (not important for benchmark, supposed to be a constant data flow)
-    free(hc_containers);
-    free(hc_info);
-
-    std::cout
-            << "t_free_cpu         = " << t_free_cpu << std::endl
-            << std::endl;
+    //free(hc_containers);
+    //free(hc_info);
     
 
 
     std::cout << "SYCL sycl_cluster_verification_count(" << sycl_cluster_verification_count << ")  "
               << "sycl_cluster_error_count(" << sycl_cluster_error_count << ")" << std::endl;
 
+    log("");
+    if (sycl_cluster_error_count == 0) {
+        log("Terminated with no error.");
+    } else {
+        log("ERROR bad number of cluster found.");
+    }
+    log("");
+    
+    //log("-- max_cell_count_per_module_global = " + std::to_string(max_cell_count_per_module_global) + " --");
 
-    log("-- max_cell_count_per_module_global = " + std::to_string(max_cell_count_per_module_global) + " --");
-
-    /*if (DO_BENCHMARK) {
-        
-        t_gpu = t_allocation + t_copy_to_device + t_parallel_for + t_read_from_device;
-
-        std::cout << "t_cpu              = " << t_cpu << std::endl
-                  << "t_gpu              = " << t_gpu << std::endl
-                  << "t_linearization    = " << t_linearization << std::endl
-                  << "t_allocation       = " << t_allocation << std::endl
-                  << "t_copy_to_device   = " << t_copy_to_device << std::endl
-                  << "t_parallel_for     = " << t_parallel_for << std::endl
-                  << "t_read_from_device = " << t_read_from_device << std::endl
-                  << "t_sum_clusters_from_device = " << t_sum_clusters_from_device << std::endl
-                  << "t_free_gpu         = " << t_free_gpu << std::endl
-                  << "t_free_cpu         = " << t_free_cpu << std::endl
-                  << std::endl;
-
-    }*/
     return 0;
 } catch (cl::sycl::exception const &e) {
     std::cout << "An exception is caught while processing SyCL code.\n";
