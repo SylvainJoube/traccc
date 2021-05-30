@@ -205,6 +205,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         global_cell_count += event_cell_count;
     }
     log("\n done. =====");
+    log("");
 
 
 
@@ -480,8 +481,8 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         // Only checks the culster count, not the labels (I will do that in the future)
 
         if (total_cluster_count_chk == total_cluster_count) {
-            log("OK Seems to have worked, same number of clusters on GPU and CPU ! ("
-            + std::to_string(total_cluster_count) + ")");
+            //log("OK Seems to have worked, same number of clusters on GPU and CPU ! ("
+            //+ std::to_string(total_cluster_count) + ")");
         } else {
             log("!!!!!-ERROR-!!!!! : cluster number does not match between CPU and GPU.");
             log("Cluster count at event " + std::to_string(0) + " = " + std::to_string(total_cluster_count)
@@ -490,7 +491,6 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             sycl_cluster_error_count += std::abs(static_cast<int>(total_cluster_count_chk) - static_cast<int>(total_cluster_count));
         }
 
-        logsl("free shared memory...");
         t_start = get_ms();
         // Free SYCL malloc_shared
         cl::sycl::free(ctrl_input_array, sycl_q);
@@ -499,7 +499,6 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         cl::sycl::free(output_cell_array, sycl_q);
         t_free_gpu = get_ms() - t_start;
         t_start = get_ms();
-        log("ok");
         /*
 
         logsl("free device memory...");
@@ -532,9 +531,9 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
                 //<< "t_sum_clusters_from_device   = " << t_sum_clusters_from_device << std::endl
                 << "t_free_device                = " << t_free_gpu << std::endl
                 << "t_free_linearization - - - - = ..."  << std::endl // << t_read_from_device << std::endl
-                << std::endl;
+                ;
 
-        log("warmup iteration " + std::to_string(iwarmup_and_final_exec) + "  FINISHED!!");
+        log("");
     }
     
     // Free RAM only at the end
@@ -565,7 +564,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         log("ERROR bad number of cluster found.");
     }
     log("");
-    
+
     //log("-- max_cell_count_per_module_global = " + std::to_string(max_cell_count_per_module_global) + " --");
 
     return 0;

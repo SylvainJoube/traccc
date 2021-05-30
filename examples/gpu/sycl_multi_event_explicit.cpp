@@ -202,6 +202,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         global_cell_count += event_cell_count;
     }
     log("\n done. =====");
+    log("");
 
     
 
@@ -442,8 +443,8 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
         // Only checks the culster count, not the labels (I will do that in the future)
 
         if (total_cluster_count_chk == total_cluster_count) {
-            log("OK Seems to have worked, same number of clusters on GPU and CPU ! ("
-            + std::to_string(total_cluster_count) + ")");
+            //log("OK Seems to have worked, same number of clusters on GPU and CPU ! ("
+            //+ std::to_string(total_cluster_count) + ")");
         } else {
             log("!!!!!-ERROR-!!!!! : cluster number does not match between CPU and GPU.");
             log("Cluster count at event " + std::to_string(0) + " = " + std::to_string(total_cluster_count)
@@ -485,7 +486,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
                 << "t_read_from_device - - - - - = " << t_read_from_device << std::endl
                 << "t_free_device                = " << t_free_device << std::endl
                 << "t_free_linearization - - - - = " << t_free_linearization << std::endl // << t_read_from_device << std::endl
-                << std::endl;
+                ;
 
         log("");//log("warmup iteration " + std::to_string(iwarmup_and_final_exec) + "  FINISHED!!");
     }
