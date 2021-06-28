@@ -66,7 +66,21 @@ uint64_t get_ms() {
 void log(std::string str) {
     std::cout << str << std::endl;
 }
+void logsl(std::string str) {
+    std::cout << str;
+    std::cout << std::flush;
+}
 
+namespace traccc {
+    struct multi_event_info {
+        uint cell_start_index = 0;
+        uint module_start_index = 0;
+        uint module_count = 0;
+        uint cell_count = 0;
+    };
+}
+
+// ================== Explicit USM, with a single large buffer ==================
 
 int seq_run(const std::string& detector_file, const std::string& cells_dir, unsigned int events)
 {
@@ -78,20 +92,16 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
     }
     auto data_directory = std::string(env_d_d);
 
-    /*log("sycl_ccl_usm_explicit_global");
-    log("detector_file = " + detector_file);
-    log("cells_dir = " + cells_dir);
-    log("data_directory = " + data_directory);*/
+    // Read the surface transforms
+    /*std::string io_detector_file = data_directory + detector_file;
+    traccc::surface_reader sreader(io_detector_file, {"geometry_id", "cx", "cy", "cz", "rot_xu", "rot_xv", "rot_xw", "rot_zu", "rot_zv", "rot_zw"});
+    auto surface_transforms = traccc::read_surfaces(sreader);
+    */
 
     if ( ! traccc::binio::create_binary_from_csv_verbose(detector_file, cells_dir, data_directory, events) ) {
         log("FATAL - ERROR on binary creation.");
         return -1;
     }
-
-    // Read the surface transforms
-    /*std::string io_detector_file = data_directory + detector_file;
-    traccc::surface_reader sreader(io_detector_file, {"geometry_id", "cx", "cy", "cz", "rot_xu", "rot_xv", "rot_xw", "rot_zu", "rot_zv", "rot_zw"});
-    auto surface_transforms = traccc::read_surfaces(sreader);*/
 
     // Algorithms
     traccc::component_connection cc; // CCL
@@ -117,6 +127,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
     uint64_t t_cpu = 0; // cpu-land
     uint64_t t_gpu = 0; // sycl-land
     uint64_t t_linearization = 0; // transformation into 1D array
+    uint64_t t_queue_creation = 0;
     uint64_t t_allocation = 0;
     uint64_t t_copy_to_device = 0;
     uint64_t t_parallel_for = 0;
@@ -127,119 +138,138 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
     uint64_t t_free_cpu = 0;
 
     uint max_cell_count_per_module_global = 0;
+    
+    // Ok, that's actually VERY VERY DIRTY, I'm sorry fot that...
+    const uint max_cell_count_per_module = 1000; //max_cell_count_per_module_t;
 
+    // Read all events, make a vector of cell containers with it.
+    // and save the module index of start and end for every event.
+    // Modules can be processed at the same time, because they are fully independant.
 
-    // SyCL test code
-    // The default device selector will select the most performant device.
-    cl::sycl::default_selector d_selector;
+    uint global_module_count = 0;
+    uint global_cell_count = 0;
 
-    try {
-        cl::sycl::queue sycl_q(d_selector, exception_handler);
+    traccc::host_cell_container hc_containers[events];
+    traccc::multi_event_info hc_info[events];
 
-        // Print out the device information used for the kernel code.
-        std::cout << "Running on device: "
-                << sycl_q.get_device().get_info<cl::sycl::info::device::name>() << "\n";
+    log("\n===== Loading events... ");
+
+    // Loop over events
+    // Save each event data into RAM
+    // Counts the total number of modules and cells
+    for (unsigned int event = 0; event < events; ++event){
+        logsl("" + std::to_string(event) + " ");
+
+        // Read the cells from the relevant event file
+        std::string event_bin_path = traccc::binio::get_binary_directory(cells_dir, data_directory)
+                                     + "/event"+std::to_string(event)+".bin";
+        //"/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin";
+        traccc::host_cell_container cells_per_event;
+        bool binio_success = traccc::binio::read_cells(event_bin_path, cells_per_event);
+        if ( ! binio_success ) {
+            log("FATAL ERROR : unable to load event " + std::to_string(event) + " from binary file.");
+            return 10;
+        }
+        hc_containers[event] = cells_per_event;
+
+        uint event_module_count = cells_per_event.headers.size();
+
+        global_module_count += event_module_count;
+
+        uint event_cell_count = 0;
         
-        log("Processing events...");
+        for (std::size_t i = 0; i < event_module_count; ++i ) {
+            event_cell_count += cells_per_event.items[i].size();
+        }
+        hc_info[event].module_count = event_module_count;
+        hc_info[event].cell_count = event_cell_count;
+        global_cell_count += event_cell_count;
+    }
+    log("\n done. =====");
 
-        // Loop over events
-        for (unsigned int event = 0; event < events; ++event){
-            log("\n===== Processing event " + std::to_string(event) + " =====");
+    uint module_count = global_module_count;
+    uint total_cell_count = global_cell_count;
 
-            // Read the cells from the relevant event file
-            /*std::string event_string = "000000000";
-            std::string event_number = std::to_string(event);
-            event_string.replace(event_string.size()-event_number.size(), event_number.size(), event_number);
+    t_start = get_ms();
 
+    // ==== 1D array creation from modules and cells (RAM) ====
 
-            std::string io_cells_file = data_directory+cells_dir+std::string("/event")+event_string+std::string("-cells.csv");
-            traccc::cell_reader creader(io_cells_file, {"geometry_id", "hit_id", "cannel0", "channel1", "activation", "time"});
-            traccc::host_cell_container cells_per_event = traccc::read_cells(creader, resource, surface_transforms);*/
+    // Module controllers allocation (input / output)
+    traccc::sycl::ccl::input_module_ctrl *ctrl_input_array = new traccc::sycl::ccl::input_module_ctrl[module_count];
+    traccc::sycl::ccl::output_module_ctrl *ctrl_output_array = new traccc::sycl::ccl::output_module_ctrl[module_count];
+    uint current_cell_global_index = 0;
+    uint current_module_index = 0;
+    uint max_cell_count_per_module_t = 0;
+
+    // Allocation of the main arrays of cells
+    traccc::sycl::ccl::input_cell *input_cell_array = new traccc::sycl::ccl::input_cell[total_cell_count];
+    traccc::sycl::ccl::output_cell *output_cell_array = new traccc::sycl::ccl::output_cell[total_cell_count];
+
+    // Fill hc_info
+    for (unsigned int event = 0; event < events; ++event) {
+        traccc::host_cell_container &cells_per_event = hc_containers[event];
+        
+        traccc::multi_event_info &einfo = hc_info[event];
+        einfo.cell_start_index = current_cell_global_index;
+        einfo.module_start_index = current_module_index;
+        
+        // Filling the modules and cells
+        // For each module...
+        vecmem::jagged_vector<traccc::cell> &cells_per_module_jagged = cells_per_event.items;
+
+        for (std::size_t i = 0; i < cells_per_module_jagged.size(); ++i) {
+            vecmem::vector<traccc::cell> &cells_per_module = cells_per_module_jagged[i];
             
-            std::string event_bin_path = traccc::binio::get_binary_directory(cells_dir, data_directory)
-                                         + "/event"+std::to_string(event)+".bin"; //"/home/sylvain/Desktop/StageM2/traccc/data_bin/event"+std::to_string(event)+".bin";
-
-            traccc::host_cell_container cells_per_event;
-            bool binio_success = traccc::binio::read_cells(event_bin_path, cells_per_event);
-
-            // Number of modules from this event
-            uint module_count = cells_per_event.headers.size();
-
-            //log("S - I think header size(" + std::to_string(module_count) + ") should be equal to "
-            //+ "items size(" + std::to_string(cells_per_event.items.size()) + ")");
-            // a vector of modules
-            // and a jagged vector of cells
-            
-            m_modules += module_count;
-
-            // Output containers
-            traccc::host_measurement_container measurements_per_event;
-            traccc::host_spacepoint_container spacepoints_per_event;
-
-            measurements_per_event.headers.reserve(module_count);
-            measurements_per_event.items.reserve(module_count);
-            spacepoints_per_event.headers.reserve(module_count);
-            spacepoints_per_event.items.reserve(module_count);
-
-            std::cout << "[event " << event << "] module_count = " << module_count << std::endl;
-            
-            t_start = get_ms();
-
-            // ================== Explicit USM, with a single large buffer ==================
-
-            // ==== 1D array creation from modules and cells (RAM) ====
-
-            // Module controllers allocation (input / output)
-            traccc::sycl::ccl::input_module_ctrl *ctrl_input_array = new traccc::sycl::ccl::input_module_ctrl[module_count];
-            traccc::sycl::ccl::output_module_ctrl *ctrl_output_array = new traccc::sycl::ccl::output_module_ctrl[module_count];
-            uint current_cell_global_index = 0;
-            uint current_module_index = 0;
-
-            uint total_cell_count = 0;
-
-            for (std::size_t i = 0; i < cells_per_event.items.size(); ++i ) {
-                //traccc::cell_module& module = cells_per_event.headers[i];
-                total_cell_count += cells_per_event.items[i].size();
+            // initialize the module
+            ctrl_input_array[current_module_index].cell_count = cells_per_module.size();
+            ctrl_input_array[current_module_index].cell_start_index = current_cell_global_index;
+            ctrl_output_array[current_module_index].cluster_count = 0; // <- will be removed
+            // save the cells to the 1D array
+            for (auto &cell : cells_per_module) {
+                input_cell_array[current_cell_global_index].cell = cell;
+                ++current_cell_global_index;
             }
-
-            // Allocation of the main arrays of cells
-            traccc::sycl::ccl::input_cell *input_cell_array = new traccc::sycl::ccl::input_cell[total_cell_count];
-            traccc::sycl::ccl::output_cell *output_cell_array = new traccc::sycl::ccl::output_cell[total_cell_count];
-
-            uint max_cell_count_per_module_t = 0;
-            // Filling the modules and cells
-            // For each module...
-            vecmem::jagged_vector<traccc::cell> &cells_per_module_jagged = cells_per_event.items;
-
-            for (std::size_t i = 0; i < cells_per_module_jagged.size(); ++i) {
-                vecmem::vector<traccc::cell> &cells_per_module = cells_per_module_jagged[i];
-                
-                // initialize the module
-                ctrl_input_array[current_module_index].cell_count = cells_per_module.size();
-                ctrl_input_array[current_module_index].cell_start_index = current_cell_global_index;
-                ctrl_output_array[current_module_index].cluster_count = 0; // <- will be removed
-                // save the cells to the 1D array
-                for (auto &cell : cells_per_module) {
-                    input_cell_array[current_cell_global_index].cell = cell;
-                    ++current_cell_global_index;
-                }
-                if (max_cell_count_per_module_t < cells_per_module.size()) {
-                    max_cell_count_per_module_t = cells_per_module.size();
-                }
-                ++current_module_index;
+            if (max_cell_count_per_module_t < cells_per_module.size()) {
+                max_cell_count_per_module_t = cells_per_module.size();
             }
+            ++current_module_index;
+        }
 
-            // Ok, that's actually VERY VERY DIRTY, I'm sorry fot that...
-            const uint max_cell_count_per_module = 1000; //max_cell_count_per_module_t;
+        // Ok, that's actually VERY VERY DIRTY, I'm sorry fot that...
+        const uint max_cell_count_per_module = 1000; //max_cell_count_per_module_t;
 
-            if (max_cell_count_per_module_t > max_cell_count_per_module_global)
-                max_cell_count_per_module_global = max_cell_count_per_module_t;
-
+        if (max_cell_count_per_module_t > max_cell_count_per_module_global)
+            max_cell_count_per_module_global = max_cell_count_per_module_t;
             // For event 1 to 10, that was about 991 cells.
-            //log("max_cell_count_per_module = " + std::to_string(max_cell_count_per_module));
+        //log("max_cell_count_per_module = " + std::to_string(max_cell_count_per_module));
+    }
+    
+    t_linearization = get_ms() - t_start;
+    t_start = get_ms();
+
+    uint warmup_count = 0;
+
+    for (uint iwarmup_and_final_exec = 0; iwarmup_and_final_exec < warmup_count + 1; ++iwarmup_and_final_exec) {
+
+        log("warmup iteration " + std::to_string(iwarmup_and_final_exec) + "...");
+
+        // SyCL test code
+        // The default device selector will select the most performant device.
+        cl::sycl::default_selector d_selector;
+
+        try {
+            cl::sycl::queue sycl_q(d_selector, exception_handler);
+
+            // Print out the device information used for the kernel code.
+            std::cout << "Running on device: "
+                    << sycl_q.get_device().get_info<cl::sycl::info::device::name>() << "\n";
+
+            //sycl_q.wait_and_throw();
 
             sycl_q.wait_and_throw();
-            t_linearization = get_ms() - t_start;
+            t_queue_creation = get_ms() - t_start;
+            t_start = get_ms();
+
 
             // ==== malloc_device part ====
 
@@ -373,12 +403,18 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             t_start = get_ms();
 
             uint total_cluster_count_chk = 0;
-            for (std::size_t i = 0; i < cells_per_module_jagged.size(); ++i) {
-                // cells_per_module_jagged[i] is equal to cells_per_event.items[i]
-                vecmem::vector<traccc::cell> &cells_per_module = cells_per_module_jagged[i];
-                traccc::cell_module &module_info = cells_per_event.headers[i];
-                traccc::cluster_collection clusters_per_module_cpu_verif = cc(cells_per_module, module_info);
-                total_cluster_count_chk += clusters_per_module_cpu_verif.items.size();
+            for (uint im = 0; im < events; ++im) {
+                traccc::host_cell_container &cells_per_event = hc_containers[im];
+
+                vecmem::jagged_vector<traccc::cell> &cells_per_module_jagged = cells_per_event.items;
+
+                for (std::size_t i = 0; i < cells_per_module_jagged.size(); ++i) {
+                    // cells_per_module_jagged[i] is equal to cells_per_event.items[i]
+                    vecmem::vector<traccc::cell> &cells_per_module = cells_per_module_jagged[i];
+                    traccc::cell_module &module_info = cells_per_event.headers[i];
+                    traccc::cluster_collection clusters_per_module_cpu_verif = cc(cells_per_module, module_info);
+                    total_cluster_count_chk += clusters_per_module_cpu_verif.items.size();
+                }
             }
             t_cpu = get_ms() - t_start;
 
@@ -391,7 +427,7 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
                 + std::to_string(total_cluster_count) + ")");
             } else {
                 log("!!!!!-ERROR-!!!!! : cluster number does not match between CPU and GPU.");
-                log("Cluster count at event " + std::to_string(event) + " = " + std::to_string(total_cluster_count)
+                log("Cluster count at event " + std::to_string(0) + " = " + std::to_string(total_cluster_count)
                 + " should be " + std::to_string(total_cluster_count_chk)
                 + "  total_cell_count = " + std::to_string(total_cell_count));
                 sycl_cluster_error_count += std::abs(static_cast<int>(total_cluster_count_chk) - static_cast<int>(total_cluster_count));
@@ -415,28 +451,28 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             t_free_cpu = get_ms() - t_start;
             t_start = get_ms();
 
-
-
-
-        t_gpu = t_allocation + t_copy_to_device + t_parallel_for + t_read_from_device;
-        std::cout << "t_cpu              = " << t_cpu << std::endl
-                << "t_gpu              = " << t_gpu << std::endl
-                << "t_linearization    = " << t_linearization << std::endl
-                << "t_allocation       = " << t_allocation << std::endl
-                << "t_copy_to_device   = " << t_copy_to_device << std::endl
-                << "t_parallel_for     = " << t_parallel_for << std::endl
-                << "t_read_from_device = " << t_read_from_device << std::endl
-                << "t_sum_clusters_from_device = " << t_sum_clusters_from_device << std::endl
-                << "t_free_gpu         = " << t_free_gpu << std::endl
-                << "t_free_cpu         = " << t_free_cpu << std::endl
-                << std::endl;
+        } catch (cl::sycl::exception const &e) {
+            std::cout << "An exception is caught while processing SyCL code.\n";
+            std::terminate();
         }
-
-
-    } catch (cl::sycl::exception const &e) {
-        std::cout << "An exception is caught while processing SyCL code.\n";
-        std::terminate();
+        log("warmup iteration " + std::to_string(iwarmup_and_final_exec) + "  FINISHED!!");
     }
+    
+
+    t_gpu = t_allocation + t_copy_to_device + t_parallel_for + t_read_from_device;
+    std::cout << "t_cpu              = " << t_cpu << std::endl
+            << "t_gpu              = " << t_gpu << std::endl
+            << "t_linearization    = " << t_linearization << std::endl
+            << "t_queue_creation   = " << t_queue_creation << std::endl
+            << "t_allocation       = " << t_allocation << std::endl
+            << "t_copy_to_device   = " << t_copy_to_device << std::endl
+            << "t_parallel_for     = " << t_parallel_for << std::endl
+            << "t_read_from_device = " << t_read_from_device << std::endl
+            << "t_sum_clusters_from_device = " << t_sum_clusters_from_device << std::endl
+            << "t_free_gpu         = " << t_free_gpu << std::endl
+            << "t_free_cpu         = " << t_free_cpu << std::endl
+            << std::endl;
+
 
     std::cout << "SYCL sycl_cluster_verification_count(" << sycl_cluster_verification_count << ")  "
               << "sycl_cluster_error_count(" << sycl_cluster_error_count << ")" << std::endl;
