@@ -324,9 +324,10 @@ int seq_run(const std::string& detector_file, const std::string& cells_dir, unsi
             t_start = get_ms();
 
             // ==== parallel for ====
+            class MyKernel_a;
 
             uint rep = module_count;
-            sycl_q.parallel_for(cl::sycl::range<1>(rep), [=](cl::sycl::id<1> module_indexx) {
+            sycl_q.parallel_for<MyKernel_a>(cl::sycl::range<1>(rep), [=](cl::sycl::id<1> module_indexx) {
 
                 uint module_index = module_indexx[0] % module_count;
                 // ---- SparseCCL part ----
