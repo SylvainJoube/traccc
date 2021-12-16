@@ -1,7 +1,7 @@
 
-#include "sycl/helloworld/helloworld_algorithm.hpp"
 #include <iostream>
 
+#include "sycl/helloworld/helloworld_algorithm.hpp"
 
 int seq_run(const std::string& detector_file, const std::string& hits_dir,
             unsigned int events, bool skip_cpu) {

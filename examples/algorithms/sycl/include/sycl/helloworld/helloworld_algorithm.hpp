@@ -6,7 +6,6 @@ namespace traccc::sycl {
 
 class helloworld_algorithm {
     public:
-
     // Say hello from the SYCL library
     // and test a simple vector sum on a sycl kernel
     void hello_algorithm() const {
@@ -16,4 +15,4 @@ class helloworld_algorithm {
     }
 };
 
-}
+}  // namespace traccc::sycl
