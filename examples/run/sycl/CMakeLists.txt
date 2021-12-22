@@ -11,6 +11,6 @@ enable_language( SYCL )
 add_executable( traccc_sycl_language_example "sycl_language_example.sycl" )
 
 # Helloworld by Sylvain
-add_executable( seq_helloworld "seq_helloworld.cpp" )
+add_executable( seq_helloworld "seq_helloworld.sycl" )
 target_link_libraries (seq_helloworld LINK_PUBLIC traccc::io traccc::algorithms)
 
