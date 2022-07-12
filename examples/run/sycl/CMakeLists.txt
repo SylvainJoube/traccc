@@ -26,3 +26,10 @@ traccc_add_executable( seq_example_sycl "seq_example_sycl.sycl"
                   traccc::core traccc::sycl traccc::performance )
 
 target_compile_definitions( traccc_seq_example_sycl PRIVATE EIGEN_NO_CUDA )
+
+
+traccc_add_executable( bench_seq_example_sycl "bench_seq_example_sycl.sycl"
+   LINK_LIBRARIES traccc::options vecmem::core vecmem::sycl traccc::io
+                  traccc::core traccc::sycl traccc::performance )
+
+target_compile_definitions( traccc_bench_seq_example_sycl PRIVATE EIGEN_NO_CUDA )
