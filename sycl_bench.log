@@ -1,0 +1,6 @@
+Events : 1
+clusterization_sycl : 0.715209
+seeding_cpu         : 0.128300
+seeding_sycl        : 0.004935
+tp_estimating_cpu   : 0.001750
+tp_estimating_sycl  : 0.000328

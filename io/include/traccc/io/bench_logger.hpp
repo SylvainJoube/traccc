@@ -17,16 +17,17 @@
 #include <chrono>
 
 
-namespace traccc:: bench_s {
+namespace traccc::bench_s {
 
     class timer {
     private:
         std::chrono::time_point<std::chrono::system_clock> start_;
-
+        std::uint64_t time_factor_ = 1;
 
     public:
-        timer() {
+        timer(std::uint64_t time_factor) {
             start_ = std::chrono::system_clock::now();
+            time_factor_ = time_factor;
         }
         
         // Resets chrono and gets time since last reset / creation (seconds)
@@ -34,7 +35,7 @@ namespace traccc:: bench_s {
             auto stop = std::chrono::system_clock::now();
             std::chrono::duration<double> elapsed = stop - start_;
             start_ = std::chrono::system_clock::now();
-            return elapsed.count();
+            return elapsed.count() * time_factor_;
         }
 
         // /*time*/ auto start_clusterization_cpu =
@@ -103,6 +104,11 @@ namespace traccc:: bench_s {
 
         // Constructor
         logger(std::string fname) {
+            if (fname.compare("") == 0) {
+                log("[WARNING] : LOGGER CREATED WITHOUT ANY FILE ATTACHED.");
+                // open_sucess = false;
+                return;
+            }
             init_log_file(fname);
         }
 

@@ -7,5 +7,8 @@
 traccc_add_executable( par_example "par_example.cpp"
    LINK_LIBRARIES OpenMP::OpenMP_CXX vecmem::core traccc::core traccc::io Boost::program_options)
 
+traccc_add_executable( bench_par_example "bench_par_example.cpp"
+LINK_LIBRARIES OpenMP::OpenMP_CXX vecmem::core traccc::core traccc::io Boost::program_options)
+
 traccc_add_executable( io_dec_par_example "io_dec_par_example.cpp"
    LINK_LIBRARIES OpenMP::OpenMP_CXX vecmem::core traccc::core traccc::io Boost::program_options)

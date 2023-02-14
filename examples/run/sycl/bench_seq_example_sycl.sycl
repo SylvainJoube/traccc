@@ -108,14 +108,14 @@ int seq_run(const traccc::full_tracking_input_config& i_cfg,
     float tp_estimating_cpu(0);
     float tp_estimating_sycl(0);
 
-    float file_reading_cpu2(0);
-    float clusterization_cpu2(0);
-    float sp_formation_cpu2(0);
-    float clusterization_sycl2(0);
-    float seeding_cpu2(0);
-    float seeding_sycl2(0);
-    float tp_estimating_cpu2(0);
-    float tp_estimating_sycl2(0);
+    // float file_reading_cpu2(0);
+    // float clusterization_cpu2(0);
+    // float sp_formation_cpu2(0);
+    // float clusterization_sycl2(0);
+    // float seeding_cpu2(0);
+    // float seeding_sycl2(0);
+    // float tp_estimating_cpu2(0);
+    // float tp_estimating_sycl2(0);
 
     // === bench_logger bench_logger bench_logger bench_logger ===
     traccc::bench_s::logger bench_logger("bench_sycl.log");
@@ -163,8 +163,8 @@ int seq_run(const traccc::full_tracking_input_config& i_cfg,
     for (unsigned int event = common_opts.skip;
          event < common_opts.events + common_opts.skip; ++event) {
 
-        /*time*/ auto start_file_reading_cpu = std::chrono::system_clock::now();
-        bench_timer.reset();
+        
+        /*time*/ bench_timer.reset();
 
         // Read the cells from the relevant event file for CPU algorithm
         traccc::cell_container_types::host cells_per_event =
@@ -178,59 +178,38 @@ int seq_run(const traccc::full_tracking_input_config& i_cfg,
                 event, i_cfg.cell_directory, common_opts.input_data_format,
                 surface_transforms, digi_cfg, (mr.host ? *(mr.host) : mr.main));
 
-        /*time*/ auto end_file_reading_cpu = std::chrono::system_clock::now();
-        /*time*/ std::chrono::duration<double> time_file_reading_cpu =
-            end_file_reading_cpu - start_file_reading_cpu;
-        /*time*/ file_reading_cpu += time_file_reading_cpu.count();
-        file_reading_cpu2 += bench_timer.reset();
+        /*time*/ file_reading_cpu += bench_timer.reset();
 
         /*-----------------------------
             Clusterization algorithm (CPU)
           -----------------------------*/
 
-        /*time*/ auto start_clusterization_cpu =
-            std::chrono::system_clock::now();
-        bench_timer.reset();
+        ///*time*/ bench_timer.reset();
 
         auto measurements_per_event = ca(cells_per_event);
 
-        /*time*/ auto end_clusterization_cpu = std::chrono::system_clock::now();
-        /*time*/ std::chrono::duration<double> time_clusterization_cpu =
-            end_clusterization_cpu - start_clusterization_cpu;
-        /*time*/ clusterization_cpu += time_clusterization_cpu.count();
-        clusterization_cpu2 += bench_timer.reset();
+        /*time*/ clusterization_cpu += bench_timer.reset();
 
         /*---------------------------------
                Spacepoint formation (CPU)
           ---------------------------------*/
 
-        /*time*/ auto start_sp_formation_cpu = std::chrono::system_clock::now();
-        bench_timer.reset();
+        ///*time*/ bench_timer.reset();
 
         auto spacepoints_per_event = sf(measurements_per_event);
 
-        /*time*/ auto end_sp_formation_cpu = std::chrono::system_clock::now();
-        /*time*/ std::chrono::duration<double> time_sp_formation_cpu =
-            end_sp_formation_cpu - start_sp_formation_cpu;
-        /*time*/ sp_formation_cpu += time_sp_formation_cpu.count();
-        sp_formation_cpu2 += bench_timer.reset();
+        /*time*/ sp_formation_cpu += bench_timer.reset();
 
         /*---------------------------------------------------
                Clusterization & Spacepoint formation (SYCL)
           ---------------------------------------------------*/
 
-        /*time*/ auto start_clusterization_sycl =
-            std::chrono::system_clock::now();
-        bench_timer.reset();
+        
+        ///*time*/ bench_timer.reset();
 
         auto spacepoints_sycl_buffer = ca_sycl(cells_per_event_sycl);
 
-        /*time*/ auto end_clusterization_sycl =
-            std::chrono::system_clock::now();
-        /*time*/ std::chrono::duration<double> time_clusterization_sycl =
-            end_clusterization_sycl - start_clusterization_sycl;
-        /*time*/ clusterization_sycl += time_clusterization_sycl.count();
-        clusterization_sycl2 += bench_timer.reset();
+        /*time*/ clusterization_sycl += bench_timer.reset();
 
         /*----------------------------
              Seeding algorithm
@@ -238,21 +217,15 @@ int seq_run(const traccc::full_tracking_input_config& i_cfg,
 
         // SYCL
 
-        /*time*/ auto start_seeding_sycl = std::chrono::system_clock::now();
-        bench_timer.reset();
+        ///*time*/ bench_timer.reset();
 
         auto seeds_sycl_buffer = sa_sycl(spacepoints_sycl_buffer);
 
-        /*time*/ auto end_seeding_sycl = std::chrono::system_clock::now();
-        /*time*/ std::chrono::duration<double> time_seeding_sycl =
-            end_seeding_sycl - start_seeding_sycl;
-        /*time*/ seeding_sycl += time_seeding_sycl.count();
-        seeding_sycl2 += bench_timer.reset();
+        /*time*/ seeding_sycl += bench_timer.reset();
 
         // CPU
 
-        /*time*/ auto start_seeding_cpu = std::chrono::system_clock::now();
-        bench_timer.reset();
+        ///*time*/ bench_timer.reset();
 
         traccc::seeding_algorithm::output_type seeds;
 
@@ -260,11 +233,7 @@ int seq_run(const traccc::full_tracking_input_config& i_cfg,
             seeds = sa(spacepoints_per_event);
         }
 
-        /*time*/ auto end_seeding_cpu = std::chrono::system_clock::now();
-        /*time*/ std::chrono::duration<double> time_seeding_cpu =
-            end_seeding_cpu - start_seeding_cpu;
-        /*time*/ seeding_cpu += time_seeding_cpu.count();
-        seeding_cpu2 += bench_timer.reset();
+        /*time*/ seeding_cpu += bench_timer.reset();
 
         /*----------------------------
           Track params estimation
@@ -272,34 +241,22 @@ int seq_run(const traccc::full_tracking_input_config& i_cfg,
 
         // SYCL
 
-        /*time*/ auto start_tp_estimating_sycl =
-            std::chrono::system_clock::now();
-        bench_timer.reset();
+        ///*time*/ bench_timer.reset();
 
         auto params_sycl = tp_sycl(spacepoints_sycl_buffer, seeds_sycl_buffer);
 
-        /*time*/ auto end_tp_estimating_sycl = std::chrono::system_clock::now();
-        /*time*/ std::chrono::duration<double> time_tp_estimating_sycl =
-            end_tp_estimating_sycl - start_tp_estimating_sycl;
-        /*time*/ tp_estimating_sycl += time_tp_estimating_sycl.count();
-        tp_estimating_sycl2 += bench_timer.reset();
+        /*time*/ tp_estimating_sycl += bench_timer.reset();
 
         // CPU
 
-        /*time*/ auto start_tp_estimating_cpu =
-            std::chrono::system_clock::now();
-        bench_timer.reset();
+        ///*time*/ bench_timer.reset();
 
         traccc::track_params_estimation::output_type params;
         if (run_cpu) {
             params = tp(spacepoints_per_event, seeds);
         }
 
-        /*time*/ auto end_tp_estimating_cpu = std::chrono::system_clock::now();
-        /*time*/ std::chrono::duration<double> time_tp_estimating_cpu =
-            end_tp_estimating_cpu - start_tp_estimating_cpu;
-        /*time*/ tp_estimating_cpu += time_tp_estimating_cpu.count();
-        tp_estimating_cpu2 += bench_timer.reset();
+        /*time*/ tp_estimating_cpu += bench_timer.reset();
 
         // Copy the seeds and spacepoints to the host for comparisons
         vecmem::sycl::copy copy(&q);
@@ -439,21 +396,13 @@ int seq_run(const traccc::full_tracking_input_config& i_cfg,
 
 
     bench_logger.flogn(file_reading_cpu,    "cpu_file_reading");
-    bench_logger.flogn(file_reading_cpu2,    "cpu_file_reading2");
     bench_logger.flogn(clusterization_cpu,  "cpu_clusterization");
-    bench_logger.flogn(clusterization_cpu2,  "cpu_clusterization2");
     bench_logger.flogn(sp_formation_cpu,    "cpu_sp_formation");
-    bench_logger.flogn(sp_formation_cpu2,    "cpu_sp_formation2");
     bench_logger.flogn(clusterization_sycl, "dev_clusterization");
-    bench_logger.flogn(clusterization_sycl2, "dev_clusterization2");
     bench_logger.flogn(seeding_cpu,         "cpu_seeding");
-    bench_logger.flogn(seeding_cpu2,         "cpu_seeding2");
     bench_logger.flogn(seeding_sycl,        "dev_seeding");
-    bench_logger.flogn(seeding_sycl2,        "dev_seeding2");
     bench_logger.flogn(tp_estimating_cpu,   "cpu_tp_estimating");
-    bench_logger.flogn(tp_estimating_cpu2,   "cpu_tp_estimating2");
     bench_logger.flogn(tp_estimating_sycl,  "dev_tp_estimating");
-    bench_logger.flogn(tp_estimating_sycl2,  "dev_tp_estimating2");
 
 
 
